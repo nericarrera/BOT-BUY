@@ -18,5 +18,5 @@ Un bot que busca ofertas reales en MercadoLibre Argentina usando Inteligencia Ar
 
 1. Cloná el repo:
    ```bash
-   git clone https://github.com/TU-USUARIO/bot-ofertas-ia.git
+   git clone https://github.com/TU-USUARIO/BOT-BUY.git
    cd bot-ofertas-ia
