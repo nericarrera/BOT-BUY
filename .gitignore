@@ -1,2 +1,7 @@
-.env
 venv/
+__pycache__/
+*.pyc
+.env
+ofertas.db
+frontend-ofertas/node_modules/
+frontend-ofertas/.next/
