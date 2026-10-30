@@ -37,7 +37,7 @@ def extraer_ofertas_con_ia(html_content):
     try:
         # Usamos el modelo flash, que es rápido y tiene capa gratuita
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.8-flash',
             contents=prompt
         )
         
