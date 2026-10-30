@@ -105,6 +105,23 @@ def extraer_ofertas_con_ia(html_productos):
     print("❌ Todos los modelos fallaron.")
     return None
 
+# ==================== LIMPIAR LINKS ====================
+def limpiar_link(url):
+    """Extrae el ID del producto y arma un link canónico de MercadoLibre"""
+    if not url:
+        return ""
+    
+    # Buscamos el ID del producto (formato MLA + números)
+    match = re.search(r'(MLA\d+)', url)
+    if match:
+        producto_id = match.group(1)
+        # Armamos el link canónico de MercadoLibre Argentina
+        return f"https://articulo.mercadolibre.com.ar/{producto_id}"
+    
+    # Si no encontramos ID, devolvemos el dominio
+    match = re.search(r'(https?://[^/]+)', url)
+    return match.group(1) if match else url
+
 # ==================== MAIN ====================
 def run():
     print("🚀 Iniciando bot de ofertas...")
