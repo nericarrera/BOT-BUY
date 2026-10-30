@@ -19,12 +19,25 @@ def inicio():
 @app.get("/ofertas")
 def obtener_ofertas():
     conn = sqlite3.connect('ofertas.db')
-    conn.row_factory = sqlite3.Row  # Para que devuelva diccionarios
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
+    # Aseguramos que la tabla exista
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS productos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            titulo TEXT,
+            precio REAL,
+            envio_gratis INTEGER,
+            link TEXT,
+            imagen TEXT,
+            categoria TEXT,
+            tienda TEXT,
+            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     cursor.execute("SELECT * FROM productos ORDER BY fecha DESC LIMIT 50")
     filas = cursor.fetchall()
     conn.close()
     
-    # Convertir a lista de diccionarios
     ofertas = [dict(fila) for fila in filas]
     return {"total": len(ofertas), "ofertas": ofertas}

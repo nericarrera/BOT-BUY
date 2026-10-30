@@ -1,11 +1,7 @@
 import os
-import json
 import time
 import sqlite3
-import re
-from google import genai
-from playwright.sync_api import sync_playwright
-from playwright_stealth import Stealth
+import requests
 from dotenv import load_dotenv
 from config import BUSQUEDAS
 
@@ -22,6 +18,7 @@ def init_db():
             precio REAL,
             envio_gratis INTEGER,
             link TEXT,
+            imagen TEXT,
             categoria TEXT,
             tienda TEXT,
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -29,161 +26,101 @@ def init_db():
     ''')
     conn.commit()
     conn.close()
-    print("✅ Base de datos lista (ofertas.db)")
+    print("✅ Base de datos lista")
 
 def guardar_producto(producto):
     conn = sqlite3.connect('ofertas.db')
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO productos (titulo, precio, envio_gratis, link, categoria, tienda)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (producto['titulo'], producto['precio'], producto['envio_gratis'], producto['link'], producto['categoria'], producto['tienda']))
+        INSERT INTO productos (titulo, precio, envio_gratis, link, imagen, categoria, tienda)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (producto['titulo'], producto['precio'], producto['envio_gratis'], producto['link'], producto['imagen'], producto['categoria'], producto['tienda']))
     conn.commit()
     conn.close()
 
-# ==================== LIMPIAR LINKS ====================
-def limpiar_link(url):
-    if not url:
-        return ""
-    match = re.search(r'(MLA\d+)', url)
-    if match:
-        return f"https://articulo.mercadolibre.com.ar/{match.group(1)}"
-    match = re.search(r'(https?://[^/]+)', url)
-    return match.group(1) if match else url
-
-# ==================== IA ====================
-def extraer_ofertas_con_ia(html_productos, categoria):
-    print(f"🧠 Enviando {categoria} a Gemini...")
+# ==================== API DE MERCADOLIBRE ====================
+def buscar_en_api(query, categoria):
+    """Busca productos usando la API pública de MercadoLibre."""
+    print(f"🔍 Buscando '{query}' en la API de MercadoLibre...")
     
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        print("❌ ERROR: No se encontró GEMINI_API_KEY")
-        return None
+    # Endpoint público de búsqueda para Argentina (MLA)
+    url = f"https://api.mercadolibre.com/sites/MLA/search?q={query}&limit=5"
+    
+    try:
+        response = requests.get(url, timeout=15)
         
-    client = genai.Client(api_key=api_key)
-    
-    prompt = f"""
-    Eres un experto en e-commerce. Te paso el HTML de los resultados de búsqueda de MercadoLibre para la categoría "{categoria}".
-    Extraé hasta 5 productos. Para cada uno necesito:
-    1. titulo
-    2. precio (solo el número, sin puntos ni símbolos)
-    3. envio_gratis (true/false)
-    4. link (la URL base del producto, sin parámetros de tracking)
-    
-    Si no encontrás productos, devolveme un JSON con un campo "error".
-    Devolveme ÚNICAMENTE un JSON válido con un array llamado "productos".
-    No agregues texto extra, solo el JSON.
-    
-    HTML de productos:
-    {html_productos[:40000]} 
-    """
-    
-    modelos = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-2.5-flash']
-    
-    for modelo in modelos:
-        for intento in range(2):
-            try:
-                response = client.models.generate_content(
-                    model=modelo,
-                    contents=prompt
-                )
-                texto_limpio = response.text.replace('```json', '').replace('```', '').strip()
-                return json.loads(texto_limpio)
-                
-            except Exception as e:
-                error_msg = str(e)
-                if "503" in error_msg or "UNAVAILABLE" in error_msg:
-                    print(f"   ⏳ Google saturado. Esperando 3 segundos...")
-                    time.sleep(3)
-                elif "404" in error_msg or "NOT_FOUND" in error_msg:
-                    print(f"   ⚠️ Modelo {modelo} no disponible. Probando el siguiente...")
-                    break
-                else:
-                    print(f"   ❌ Error inesperado: {e}")
-                    time.sleep(2)
-    
-    print(f"❌ Todos los modelos fallaron para {categoria}.")
-    return None
+        if response.status_code != 200:
+            print(f"   ❌ Error HTTP: {response.status_code}")
+            return []
+        
+        data = response.json()
+        resultados = data.get('results', [])
+        
+        if not resultados:
+            print("   ⚠️ No se encontraron resultados.")
+            return []
+        
+        print(f"   ✅ {len(resultados)} productos encontrados.")
+        return resultados
+        
+    except Exception as e:
+        print(f"   ❌ Error de conexión: {e}")
+        return []
 
 # ==================== MAIN ====================
 def run():
-    print("🚀 Iniciando bot de ofertas MULTI-CATEGORÍA...")
+    print("🚀 Iniciando bot de ofertas (API oficial)...")
     init_db()
     
-    total_guardados = 0 # ✅ NUEVO: Contador global
+    total_guardados = 0
     
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
-        page = browser.new_page()
-        Stealth().apply_stealth_sync(page)
+    for busqueda in BUSQUEDAS:
+        print(f"\n🔍 Procesando: {busqueda['categoria'].upper()}...")
         
-        for busqueda in BUSQUEDAS:
-            print(f"\n🔍 Buscando: {busqueda['categoria'].upper()}...")
-            
+        # Usamos el query de la config
+        query = busqueda['query']
+        resultados = buscar_en_api(query, busqueda['categoria'])
+        
+        for item in resultados:
             try:
-                page.goto(busqueda['url'], timeout=30000)
-                page.wait_for_timeout(3000)
+                # Extraer datos del JSON de la API
+                titulo = item.get('title', 'Sin título')
+                precio = float(item.get('price', 0))
                 
-                if "account-verification" in page.url:
-                    print("⚠️ Bloqueo detectado, saltando...")
-                    continue
+                # Envío gratis: el campo puede ser 'shipping.free_shipping' o 'shipping.free_methods'
+                envio_gratis = 0
+                shipping = item.get('shipping', {})
+                if shipping.get('free_shipping') or shipping.get('free_methods'):
+                    envio_gratis = 1
                 
-                page.wait_for_selector("ol.ui-search-layout", timeout=10000)
-                tarjetas = page.locator("ol.ui-search-layout > li").all()
-                print(f"✅ {len(tarjetas)} tarjetas encontradas.")
+                # Link directo al producto
+                link = item.get('permalink', '')
                 
-                # Extraer links
-                links_reales = []
-                for tarjeta in tarjetas[:10]:
-                    try:
-                        link_elem = tarjeta.locator("a.ui-search-link, a.poly-component__title").first
-                        if link_elem.count() > 0:
-                            links_reales.append(link_elem.get_attribute("href") or "")
-                    except:
-                        links_reales.append("")
+                # Imagen: usamos 'thumbnail' o 'secure_thumbnail' (mejor calidad)
+                imagen = item.get('thumbnail', '')
+                if not imagen:
+                    imagen = item.get('secure_thumbnail', '')
                 
-                # Extraer HTML
-                html_util = ""
-                for i, tarjeta in enumerate(tarjetas[:10]):
-                    html_util += f"\n<!-- PRODUCTO {i+1} -->\n"
-                    html_util += tarjeta.inner_html()
-                
-                # IA
-                resultado = extraer_ofertas_con_ia(html_util, busqueda['categoria'])
-                
-                # ✅ NUEVO: Manejo explícito de éxito/error
-                if resultado and "productos" in resultado:
-                    productos_guardados = 0
-                    for i, prod in enumerate(resultado['productos'], 1):
-                        try:
-                            link_real = links_reales[i-1] if i-1 < len(links_reales) else ""
-                            link_limpio = limpiar_link(link_real)
-                            
-                            guardar_producto({
-                                'titulo': prod.get('titulo'),
-                                'precio': float(prod.get('precio', 0)),
-                                'envio_gratis': 1 if prod.get('envio_gratis') else 0,
-                                'link': link_limpio,
-                                'categoria': busqueda['categoria'],
-                                'tienda': 'MercadoLibre'
-                            })
-                            productos_guardados += 1
-                        except Exception as e:
-                            print(f"   ❌ Error guardando producto: {e}")
-                    
-                    total_guardados += productos_guardados
-                    print(f"   💾 {productos_guardados} productos guardados.")
-                    
-                else:
-                    print(f"   ⚠️ La IA no devolvió productos para {busqueda['categoria']}.")
-                    if resultado and "error" in resultado:
-                        print(f"   🤖 IA dice: {resultado['error']}")
+                # Guardar en la base
+                guardar_producto({
+                    'titulo': titulo,
+                    'precio': precio,
+                    'envio_gratis': envio_gratis,
+                    'link': link,
+                    'imagen': imagen,
+                    'categoria': busqueda['categoria'],
+                    'tienda': 'MercadoLibre'
+                })
+                total_guardados += 1
+                print(f"   💾 Guardado: {titulo[:50]}... | ${precio}")
                 
             except Exception as e:
-                print(f"❌ Error en {busqueda['categoria']}: {e}")
+                print(f"   ❌ Error guardando: {e}")
         
-        browser.close()
-        print(f"\n🏁 Bot finalizado. TOTAL GUARDADOS: {total_guardados} productos.")
+        # Pequeña pausa para no saturar la API
+        time.sleep(1)
+    
+    print(f"\n🏁 Bot finalizado. TOTAL GUARDADOS: {total_guardados} productos.")
 
 if __name__ == "__main__":
     run()
