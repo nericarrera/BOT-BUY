@@ -1,18 +1,11 @@
-# config.py - Configuración de categorías para buscar
+# config.py - Configuración de categorías para buscar en Frávega
 BUSQUEDAS = [
     # Tecnología
-    { "categoria": "celulares", "query": "celulares", "url": "https://listado.mercadolibre.com.ar/celulares#D[A:celulares]" },
-    { "categoria": "computacion", "query": "notebook", "url": "https://listado.mercadolibre.com.ar/notebooks#D[A:notebook]" },
-    { "categoria": "televisores", "query": "smart tv", "url": "https://listado.mercadolibre.com.ar/smart-tv#D[A:smart-tv]" },
+    { "categoria": "televisores", "query": "smart tv", "url": "https://www.fravega.com/l/tv-y-video/televisores/" },
+    { "categoria": "celulares", "query": "celulares", "url": "https://www.fravega.com/l/celulares/" },
+    { "categoria": "computacion", "query": "notebooks", "url": "https://www.fravega.com/l/informatica/notebooks/" },
     
     # Electrodomésticos
-    { "categoria": "cocinas", "query": "cocina", "url": "https://listado.mercadolibre.com.ar/cocinas#D[A:cocinas]" },
-    { "categoria": "heladeras", "query": "heladera", "url": "https://listado.mercadolibre.com.ar/heladeras#D[A:heladeras]" },
-    
-    # Muebles
-    { "categoria": "muebles", "query": "muebles", "url": "https://listado.mercadolibre.com.ar/muebles#D[A:muebles]" },
-    
-    # Ropa
-    { "categoria": "zapatillas", "query": "zapatillas running", "url": "https://listado.mercadolibre.com.ar/zapatillas-running" },
-    { "categoria": "camperas", "query": "camperas", "url": "https://listado.mercadolibre.com.ar/camperas#D[A:camperas]" },
+    { "categoria": "heladeras", "query": "heladeras", "url": "https://www.fravega.com/l/electrodomesticos/heladeras/" },
+    { "categoria": "cocinas", "query": "cocinas", "url": "https://www.fravega.com/l/electrodomesticos/cocinas/" },
 ]

@@ -1,7 +1,10 @@
 import os
+import json
 import time
 import sqlite3
-import requests
+import re
+from playwright.sync_api import sync_playwright
+from playwright_stealth import Stealth
 from dotenv import load_dotenv
 from config import BUSQUEDAS
 
@@ -38,89 +41,109 @@ def guardar_producto(producto):
     conn.commit()
     conn.close()
 
-# ==================== API DE MERCADOLIBRE ====================
-def buscar_en_api(query, categoria):
-    """Busca productos usando la API pública de MercadoLibre."""
-    print(f"🔍 Buscando '{query}' en la API de MercadoLibre...")
-    
-    # Endpoint público de búsqueda para Argentina (MLA)
-    url = f"https://api.mercadolibre.com/sites/MLA/search?q={query}&limit=5"
+# ==================== EXTRACCIÓN DE FRÁVEGA ====================
+def extraer_productos_fravega(page, categoria):
+    """Extrae productos usando el JSON-LD (datos estructurados) de Frávega."""
+    productos = []
     
     try:
-        response = requests.get(url, timeout=15)
-        
-        if response.status_code != 200:
-            print(f"   ❌ Error HTTP: {response.status_code}")
+        # Frávega incluye un script con type="application/ld+json" con la lista de productos
+        script_ld = page.locator('script[type="application/ld+json"]').first
+        if script_ld.count() == 0:
+            print("   ⚠️ No se encontró JSON-LD en la página.")
             return []
         
-        data = response.json()
-        resultados = data.get('results', [])
+        json_text = script_ld.inner_text()
+        data = json.loads(json_text)
         
-        if not resultados:
-            print("   ⚠️ No se encontraron resultados.")
-            return []
+        # La estructura puede variar. Buscamos el "ItemList" o "Product"
+        items = []
+        if isinstance(data, list):
+            for item in data:
+                if item.get("@type") == "ItemList":
+                    items = item.get("itemListElement", [])
+                    break
+                elif item.get("@type") == "Product":
+                    items.append(item)
+        elif data.get("@type") == "ItemList":
+            items = data.get("itemListElement", [])
+        elif data.get("@type") == "Product":
+            items = [data]
         
-        print(f"   ✅ {len(resultados)} productos encontrados.")
-        return resultados
+        for item in items:
+            # Si el item es un "ListItem", el producto está en "item"
+            prod = item.get("item", item) if item.get("@type") == "ListItem" else item
+            
+            titulo = prod.get("name", "Sin título")
+            precio = prod.get("offers", {}).get("price", 0) if isinstance(prod.get("offers"), dict) else 0
+            link = prod.get("url", "")
+            imagen = prod.get("image", "")
+            
+            # Limpiamos el link (a veces viene con parámetros)
+            if link:
+                link = link.split("?")[0]
+            
+            if titulo and precio > 0:
+                productos.append({
+                    "titulo": titulo,
+                    "precio": float(precio),
+                    "link": link,
+                    "imagen": imagen,
+                    "envio_gratis": 0,  # Frávega no siempre lo muestra en el listado
+                })
+        
+        print(f"   ✅ {len(productos)} productos extraídos del JSON-LD.")
+        return productos
         
     except Exception as e:
-        print(f"   ❌ Error de conexión: {e}")
+        print(f"   ❌ Error extrayendo JSON-LD: {e}")
         return []
 
 # ==================== MAIN ====================
 def run():
-    print("🚀 Iniciando bot de ofertas (API oficial)...")
+    print("🚀 Iniciando bot de ofertas (Frávega)...")
     init_db()
     
     total_guardados = 0
     
-    for busqueda in BUSQUEDAS:
-        print(f"\n🔍 Procesando: {busqueda['categoria'].upper()}...")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False)
+        page = browser.new_page()
+        Stealth().apply_stealth_sync(page)
         
-        # Usamos el query de la config
-        query = busqueda['query']
-        resultados = buscar_en_api(query, busqueda['categoria'])
-        
-        for item in resultados:
+        for busqueda in BUSQUEDAS:
+            print(f"\n🔍 Procesando: {busqueda['categoria'].upper()}...")
+            
             try:
-                # Extraer datos del JSON de la API
-                titulo = item.get('title', 'Sin título')
-                precio = float(item.get('price', 0))
+                page.goto(busqueda['url'], timeout=30000)
+                page.wait_for_timeout(3000)  # Esperamos a que cargue el JS
                 
-                # Envío gratis: el campo puede ser 'shipping.free_shipping' o 'shipping.free_methods'
-                envio_gratis = 0
-                shipping = item.get('shipping', {})
-                if shipping.get('free_shipping') or shipping.get('free_methods'):
-                    envio_gratis = 1
+                # Verificamos si hay bloqueo
+                if "captcha" in page.url.lower() or page.locator("text=verificación").count() > 0:
+                    print("   ⚠️ Bloqueo detectado, saltando...")
+                    continue
                 
-                # Link directo al producto
-                link = item.get('permalink', '')
+                productos = extraer_productos_fravega(page, busqueda['categoria'])
                 
-                # Imagen: usamos 'thumbnail' o 'secure_thumbnail' (mejor calidad)
-                imagen = item.get('thumbnail', '')
-                if not imagen:
-                    imagen = item.get('secure_thumbnail', '')
+                for prod in productos[:10]:  # Solo los primeros 10
+                    guardar_producto({
+                        'titulo': prod['titulo'],
+                        'precio': prod['precio'],
+                        'envio_gratis': prod['envio_gratis'],
+                        'link': prod['link'],
+                        'imagen': prod['imagen'],
+                        'categoria': busqueda['categoria'],
+                        'tienda': 'Frávega'
+                    })
+                    total_guardados += 1
                 
-                # Guardar en la base
-                guardar_producto({
-                    'titulo': titulo,
-                    'precio': precio,
-                    'envio_gratis': envio_gratis,
-                    'link': link,
-                    'imagen': imagen,
-                    'categoria': busqueda['categoria'],
-                    'tienda': 'MercadoLibre'
-                })
-                total_guardados += 1
-                print(f"   💾 Guardado: {titulo[:50]}... | ${precio}")
+                print(f"   💾 {min(len(productos), 10)} productos guardados.")
                 
             except Exception as e:
-                print(f"   ❌ Error guardando: {e}")
+                print(f"   ❌ Error en {busqueda['categoria']}: {e}")
         
-        # Pequeña pausa para no saturar la API
-        time.sleep(1)
-    
-    print(f"\n🏁 Bot finalizado. TOTAL GUARDADOS: {total_guardados} productos.")
+        browser.close()
+        print(f"\n🏁 Bot finalizado. TOTAL GUARDADOS: {total_guardados} productos.")
 
 if __name__ == "__main__":
     run()
